@@ -611,16 +611,16 @@ class CoinGeckoAPI:
                 }
                 
                 # Отладочная информация
-                logger.debug(f"Обновляем {crypto_name}:")
-                logger.debug(f"URL: {notion_base_url}/pages/{page_id}")
-                logger.debug(f"Payload: {payload}")
-                logger.debug(f"Headers: {notion_headers}")
+                logger.info(f"Обновляем {crypto_name}:")
+                logger.info(f"URL: {notion_base_url}/pages/{page_id}")
+                logger.info(f"Payload: {payload}")
+                logger.info(f"Headers: {notion_headers}")
                 
                 # Отправляем PATCH запрос для обновления записи
                 url = f"{notion_base_url}/pages/{page_id}"
                 response = requests.patch(url, json=payload, headers=notion_headers)
-                logger.debug(f"Response status: {response.status_code}")
-                logger.debug(f"Response text: {response.text}")
+                logger.info(f"Response status: {response.status_code}")
+                logger.info(f"Response text: {response.text}")
                 response.raise_for_status()
                 
                 success_count += 1
