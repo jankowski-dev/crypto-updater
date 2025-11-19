@@ -10,6 +10,7 @@ import logging
 import requests
 import json
 import time
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 
 # Настройка логирования
@@ -575,7 +576,59 @@ class CoinGeckoAPI:
                 time.sleep(10)
         
         logger.info(f"=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Обработано {len(updated_cryptos)} криптовалют ===")
+        
+        # Обновляем курсы в Notion БД
+        if updated_cryptos:
+            self.update_notion_database(updated_cryptos)
+        
         return updated_cryptos
+    
+    def update_notion_database(self, updated_cryptos: List[Dict[str, Any]]):
+        """Обновляет курсы в базе данных Notion"""
+        logger.info("=== ОБНОВЛЕНИЕ КУРСОВ В NOTION ===")
+        
+        success_count = 0
+        error_count = 0
+        
+        for crypto in updated_cryptos:
+            page_id = crypto['page_id']
+            price = crypto['price_usd']
+            crypto_name = crypto['name']
+            
+            if not price:
+                logger.warning(f"Пропускаем {crypto_name}: нет цены")
+                continue
+            
+            try:
+                # Подготавливаем данные для обновления
+                current_time = datetime.now().isoformat()
+                
+                payload = {
+                    "properties": {
+                        "Price": {"number": float(price)},
+                        "Last Updated": {"date": {"start": current_time}}
+                    }
+                }
+                
+                # Отправляем PATCH запрос для обновления записи
+                url = f"{self.base_url}/pages/{page_id}"
+                response = requests.patch(url, json=payload, headers=self.headers)
+                response.raise_for_status()
+                
+                success_count += 1
+                logger.info(f"✅ Обновлен {crypto_name}: ${price:,.2f}")
+                
+                # Небольшая задержка между обновлениями
+                time.sleep(0.5)
+                
+            except Exception as e:
+                error_count += 1
+                logger.error(f"❌ Ошибка обновления {crypto_name}: {e}")
+        
+        logger.info(f"=== ОБНОВЛЕНИЕ NOTION ЗАВЕРШЕНО ===")
+        logger.info(f"✅ Успешно обновлено: {success_count}")
+        logger.info(f"❌ Ошибок: {error_count}")
+        logger.info(f"📊 Всего обработано: {len(updated_cryptos)}")
     
     def get_batch_prices(self, coin_ids: List[str]) -> Dict[str, Any]:
         """Получает цены для списка монет одним запросом с retry"""
