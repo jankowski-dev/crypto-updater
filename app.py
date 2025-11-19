@@ -1,11 +1,9 @@
-# app.py
 import os
 import time
 import logging
 import requests
 from typing import List, Dict, Any, Optional
 from datetime import datetime
-
 
 # Настройка логирования
 def setup_logging():
@@ -26,6 +24,10 @@ class CoinGeckoClient:
     def get_prices(self, coin_ids: List[str]) -> Dict[str, Any]:
         """Запрашивает цены с CoinGecko, разбивая на чанки."""
         prices = {}
+        # Запрос CoinGecko для пустого списка ID вызывает ошибку 400
+        if not coin_ids:
+            return prices
+
         for i in range(0, len(coin_ids), self.chunk_size):
             chunk = coin_ids[i:i + self.chunk_size]
             params = {
@@ -49,7 +51,7 @@ class CoinGeckoClient:
                 if attempt == 2:
                     logging.error(f"Не удалось выполнить запрос к CoinGecko: {e}")
                     return None
-                time.sleep((2 ** attempt) * 0.5)  # Экспоненциальная задержка
+                time.sleep((2 ** attempt) * 0.5)  # Экспоненциальная задержка: 0.5s, 1s, 2s
         return None
 
 class NotionClient:
@@ -80,7 +82,10 @@ class NotionClient:
                     break
                 payload["start_cursor"] = data["next_cursor"]
             except requests.RequestException as e:
+                # Критическая ошибка Notion (например, 401 Unauthorized), завершаем скрипт
                 logging.error(f"Ошибка при получении страниц из Notion: {e}")
+                if isinstance(e, requests.HTTPError) and e.response.status_code == 401:
+                    logging.critical("Ошибка аутентификации в Notion. Проверьте NOTION_API_KEY и доступ к базе данных.")
                 raise SystemExit(1)
         return pages
 
@@ -98,8 +103,8 @@ class NotionClient:
             return True
         except requests.RequestException as e:
             logging.error(f"Критическая ошибка при обновлении страницы {page_id}: {e}")
-            if response and response.status_code == 401:
-                logging.critical("Ошибка аутентификации в Notion. Проверьте NOTION_API_KEY.")
+            if isinstance(e, requests.HTTPError) and e.response and e.response.status_code == 401:
+                logging.critical("Ошибка аутентификации в Notion. Проверьте NOTION_API_KEY и доступ к базе данных.")
                 raise SystemExit(1)
             return False
 
@@ -109,19 +114,20 @@ def main():
     # Проверка обязательных переменных окружения
     notion_api_key = os.getenv("NOTION_API_KEY")
     notion_database_id = os.getenv("NOTION_DATABASE_ID")
+
     if not notion_api_key:
-        logging.critical("Переменная окружения NOTION_API_KEY не установлена.")
+        logging.critical("Переменная окружения NOTION_API_KEY не установлена. Скрипт остановлен.")
         raise SystemExit(1)
     if not notion_database_id:
-        logging.critical("Переменная окружения NOTION_DATABASE_ID не установлена.")
+        logging.critical("Переменная окружения NOTION_DATABASE_ID не установлена. Скрипт остановлен.")
         raise SystemExit(1)
 
-    chunk_size = int(os.getenv("COINGECKO_CHUNK_SIZE", 200))
+    coingecko_chunk_size = int(os.getenv("COINGECKO_CHUNK_SIZE", 200))
 
     logging.info("Запуск скрипта обновления цен криптовалют.")
 
     # Инициализация клиентов
-    coingecko = CoinGeckoClient(chunk_size=chunk_size)
+    coingecko = CoinGeckoClient(chunk_size=coingecko_chunk_size)
     notion = NotionClient(notion_api_key, notion_database_id)
 
     # Получение всех записей
@@ -133,11 +139,23 @@ def main():
     for page in pages:
         props = page.get("properties", {})
         cg_id_prop = props.get("CoinGecko ID")
-        if not cg_id_prop or not cg_id_prop.get("type") == "rich_text" or not cg_id_prop.get("rich_text"):
+
+        # Проверка наличия и структуры CoinGecko ID
+        if not (cg_id_prop and cg_id_prop.get("type") == "rich_text" and cg_id_prop.get("rich_text")):
+            # logging.debug(f"Пропущена страница {page.get('id')} без валидного 'CoinGecko ID'.")
             continue
-        cg_id = cg_id_prop["rich_text"][0].get("text", {}).get("content", "").strip()
+        
+        # Получаем текст из rich_text
+        cg_id = ""
+        for text_obj in cg_id_prop["rich_text"]:
+            if text_obj.get("type") == "text" and text_obj.get("text", {}).get("content"):
+                cg_id = text_obj["text"]["content"].strip()
+                break # Берем первый непустой rich_text
+
         if not cg_id:
+            # logging.debug(f"Пропущена страница {page.get('id')} с пустым 'CoinGecko ID'.")
             continue
+
         coin_records.append({
             "page_id": page["id"],
             "coin_id": cg_id,
@@ -154,7 +172,7 @@ def main():
     # Запрос цен с CoinGecko
     coin_ids = [record["coin_id"] for record in coin_records]
     prices = coingecko.get_prices(coin_ids)
-    logging.info(f"Получены цены для {len(prices)} из {len(coin_ids)} монет.")
+    logging.info(f"Получены цены для {len(prices)} из {len(coin_ids)} уникальных монет.")
 
     # Обновление записей в Notion
     updated_count = 0
@@ -164,43 +182,52 @@ def main():
         new_price_data = prices.get(coin_id)
 
         if not new_price_data or "usd" not in new_price_data:
-            logging.debug(f"Цена для {coin_id} не получена от CoinGecko.")
+            logging.debug(f"Цена для {coin_id} не получена от CoinGecko или не в USD. Пропускаем.")
             continue
 
         new_price = new_price_data["usd"]
         current_price = None
+
         if record["price_prop"] and record["price_prop"].get("type") == "number":
-            current_price = record["price_prop"]["number"]
+            current_price = record["price_prop"].get("number") # Может быть None, если нет значения
 
-        if current_price is not None and abs(current_price - new_price) < 1e-10:
-            logging.debug(f"Цена для {coin_id} не изменилась: {new_price:.6f}")
+        # Сравниваем цены, учитывая float-точность
+        if current_price is not None and abs(current_price - new_price) < 1e-9: # 1e-9 - до 9 знаков после запятой
+            logging.debug(f"Цена для {coin_id} (id {page_id}) не изменилась: {float(new_price):.6f}. Пропускаем.")
             continue
-
-        # Формирование свойств для обновления
+        
         update_props = {}
 
-        # Обновление цены
+        # Формирование свойства "Price"
+        # Проверяем, что свойство "Price" существует и имеет тип "number"
         if record["price_prop"] and record["price_prop"].get("type") == "number":
             update_props["Price"] = {
                 "number": new_price
             }
-            logging.info(f"Цена {coin_id}: {current_price} -> {new_price}")
+            logging.info(f"Страница {page_id} ({coin_id}): Цена изменена {float(current_price) if current_price is not None else 'N/A'} -> {float(new_price):.6f}")
+        else:
+            logging.warning(f"Страница {page_id} ({coin_id}): Свойство 'Price' не найдено или имеет неверный тип. Обновление цены пропущено.")
 
-        # Обновление времени
+        # Формирование свойства "Last Updated"
+        # Проверяем, что свойство "Last Updated" существует и имеет тип "date"
         if record["last_updated_prop"] and record["last_updated_prop"].get("type") == "date":
-            now_iso = datetime.utcnow().isoformat() + "Z"  # UTC в формате ISO 8601
+            now_iso = datetime.utcnow().isoformat(timespec='seconds') + "Z"  # UTC формат ISO 8601 с секундами
             update_props["Last Updated"] = {
                 "date": {
                     "start": now_iso,
                     "end": None
                 }
             }
+        else:
+            logging.warning(f"Страница {page_id} ({coin_id}): Свойство 'Last Updated' не найдено или имеет неверный тип. Обновление даты пропущено.")
+
 
         if update_props:
             if notion.update_page(page_id, update_props):
                 updated_count += 1
         else:
-            logging.debug(f"Нет изменений для {coin_id}")
+            logging.debug(f"Страница {page_id} ({coin_id}): Нет подходящих свойств для обновления или изменения цен.")
+
 
     logging.info(f"Обновлено {updated_count} записей.")
     logging.info("Завершение работы скрипта.")
