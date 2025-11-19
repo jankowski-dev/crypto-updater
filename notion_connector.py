@@ -517,8 +517,8 @@ class CoinGeckoAPI:
             else:
                 logger.warning(f"❌ Не найден: {crypto_name}")
             
-            # Задержка между поисковыми запросами (увеличиваем)
-            time.sleep(2)
+            # Задержка между поисковыми запросами (сильно увеличиваем)
+            time.sleep(5)
         
         if not coin_mapping:
             logger.warning("Не найдено ни одной криптовалюты")
@@ -569,38 +569,55 @@ class CoinGeckoAPI:
                     else:
                         logger.warning(f"⚠️ {coin_info['name']}: цена не найдена")
             
-            # Задержка между батчами
+            # Задержка между батчами (увеличиваем)
             if i + batch_size < len(coin_ids):
                 logger.info("Пауза между батчами...")
-                import time
-                time.sleep(2)
+                time.sleep(10)
         
         logger.info(f"=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Обработано {len(updated_cryptos)} криптовалют ===")
         return updated_cryptos
     
     def get_batch_prices(self, coin_ids: List[str]) -> Dict[str, Any]:
-        """Получает цены для списка монет одним запросом"""
-        try:
-            coin_ids_str = ",".join(coin_ids)
-            url = f"{self.base_url}/simple/price"
-            params = {
-                'ids': coin_ids_str,
-                'vs_currencies': 'usd',
-                'include_24hr_change': 'true',
-                'include_market_cap': 'true',
-                'include_24hr_vol': 'true'
-            }
+        """Получает цены для списка монет одним запросом с retry"""
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                coin_ids_str = ",".join(coin_ids)
+                url = f"{self.base_url}/simple/price"
+                params = {
+                    'ids': coin_ids_str,
+                    'vs_currencies': 'usd',
+                    'include_24hr_change': 'true',
+                    'include_market_cap': 'true',
+                    'include_24hr_vol': 'true'
+                }
 
-            response = self.session.get(url, params=params)
-            response.raise_for_status()
-            
-            data = response.json()
-            logger.info(f"Получены данные для {len(data)} монет")
-            return data
-            
-        except Exception as e:
-            logger.error(f"Ошибка при получении цен для батча: {e}")
-            return {}
+                response = self.session.get(url, params=params)
+                response.raise_for_status()
+                
+                data = response.json()
+                logger.info(f"Получены данные для {len(data)} монет")
+                return data
+                
+            except requests.exceptions.HTTPError as e:
+                if response.status_code == 429:
+                    if attempt < max_retries - 1:
+                        wait_time = (2 ** attempt) * 5  # Exponential backoff
+                        logger.warning(f"429 ошибка, ждем {wait_time} сек перед повтором...")
+                        time.sleep(wait_time)
+                        continue
+                    else:
+                        logger.error(f"Превышено количество попыток для получения цен")
+                        return {}
+                else:
+                    logger.error(f"HTTP ошибка: {e}")
+                    return {}
+            except Exception as e:
+                logger.error(f"Ошибка при получении цен для батча: {e}")
+                return {}
+        
+        return {}
     
 
 def main():
