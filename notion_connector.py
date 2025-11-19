@@ -517,9 +517,8 @@ class CoinGeckoAPI:
             else:
                 logger.warning(f"❌ Не найден: {crypto_name}")
             
-            # Задержка между поисковыми запросами
-            import time
-            time.sleep(0.5)
+            # Задержка между поисковыми запросами (увеличиваем)
+            time.sleep(2)
         
         if not coin_mapping:
             logger.warning("Не найдено ни одной криптовалюты")
