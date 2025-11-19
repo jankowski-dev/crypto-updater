@@ -10,7 +10,6 @@ import logging
 import requests
 import json
 from typing import Optional, List, Dict, Any
-from notion_client import Client
 
 # Настройка логирования
 logging.basicConfig(
@@ -29,7 +28,8 @@ class NotionConnector:
     def __init__(self):
         self.token: Optional[str] = None
         self.database_id: Optional[str] = None
-        self.client: Optional[Client] = None
+        self.base_url = "https://api.notion.com/v1"
+        self.headers = {}
         self.coingecko_api = CoinGeckoAPI()
         self.cryptocurrencies = []
         
@@ -55,10 +55,14 @@ class NotionConnector:
             return False
     
     def initialize_client(self) -> bool:
-        """Инициализирует клиент Notion"""
+        """Инициализирует HTTP клиент для Notion"""
         try:
-            self.client = Client(auth=self.token)
-            logger.info("Клиент Notion успешно инициализирован")
+            self.headers = {
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json",
+                "Notion-Version": "2022-06-28"
+            }
+            logger.info("HTTP клиент Notion успешно инициализирован")
             return True
             
         except Exception as e:
@@ -68,12 +72,15 @@ class NotionConnector:
     def test_connection(self) -> bool:
         """Тестирует подключение к базе данных Notion"""
         try:
-            if not self.client:
+            if not self.headers:
                 logger.error("Клиент Notion не инициализирован")
                 return False
             
-            # Пробуем получить информацию о базе
-            database = self.client.databases.retrieve(database_id=self.database_id)
+            # Пробуем получить информацию о базе через HTTP запрос
+            url = f"{self.base_url}/databases/{self.database_id}"
+            response = requests.get(url, headers=self.headers)
+            response.raise_for_status()
+            database = response.json()
             
             logger.info("Подключение к Notion успешно!")
             logger.info(f"Название базы данных: {database.get('title', [{}])[0].get('plain_text', 'Неизвестно')}")
@@ -82,8 +89,8 @@ class NotionConnector:
             # Анализируем структуру базы данных
             self.analyze_database_structure(database)
             
-            # Попробуем получить записи напрямую
-            self.get_database_records_simple()
+            # Получаем записи из базы
+            self.get_database_records()
             
             return True
             
@@ -110,46 +117,37 @@ class NotionConnector:
         logger.info("=== КОНЕЦ АНАЛИЗА СТРУКТУРЫ ===")
     
     def get_database_records(self):
-        """Получает записи из базы данных"""
+        """Получает записи из базы данных через HTTP запрос"""
         logger.info("=== ПОЛУЧЕНИЕ ЗАПИСЕЙ ИЗ БАЗЫ ===")
         
         try:
-            # Получаем все записи из базы
-            records = []
-            has_more = True
+            # Получаем все записи из базы одним запросом (как в работающем примере)
+            url = f"{self.base_url}/databases/{self.database_id}/query"
+            all_pages = []
             start_cursor = None
             
-            while has_more:
-                # Используем pages.list для получения записей из базы
-                query_params = {
-                    'page_size': 100
-                }
-                
+            while True:
+                payload = {"page_size": 100}
                 if start_cursor:
-                    query_params['start_cursor'] = start_cursor
+                    payload["start_cursor"] = start_cursor
                 
-                # Фильтруем страницы по базе данных
-                result = self.client.pages.list(**query_params)
+                response = requests.post(url, json=payload, headers=self.headers)
+                response.raise_for_status()
+                data = response.json()
+                all_pages.extend(data.get("results", []))
                 
-                # Фильтруем только страницы, принадлежащие нашей базе
-                database_pages = []
-                for page in result.get('results', []):
-                    if page.get('parent', {}).get('database_id') == self.database_id:
-                        database_pages.append(page)
-                
-                records.extend(database_pages)
-                has_more = result.get('has_more', False)
-                start_cursor = result.get('next_cursor', None)
-                
-                logger.info(f"Получено записей из базы: {len(database_pages)}")
+                if data.get("has_more") and data.get("next_cursor"):
+                    start_cursor = data.get("next_cursor")
+                else:
+                    break
             
-            logger.info(f"Всего записей в базе: {len(records)}")
+            logger.info(f"Всего записей в базе: {len(all_pages)}")
             
             # Анализируем записи для поиска криптовалют
-            self.analyze_cryptocurrencies(records)
+            self.analyze_cryptocurrencies(all_pages)
             
-            # Обновляем курсы криптовалют (временно отключено для отладки)
-            # self.update_crypto_prices()
+            # Обновляем курсы криптовалют
+            self.update_crypto_prices()
             
         except Exception as e:
             logger.error(f"Ошибка при получении записей: {e}")
