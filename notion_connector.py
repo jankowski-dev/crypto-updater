@@ -32,7 +32,7 @@ class NotionConnector:
         self.database_id: Optional[str] = None
         self.base_url = "https://api.notion.com/v1"
         self.headers = {}
-        self.coingecko_api = CoinGeckoAPI(notion_headers=self.headers, notion_base_url=self.base_url)
+        self.coingecko_api = None
         self.cryptocurrencies = []
         
     def load_environment_variables(self) -> bool:
@@ -64,6 +64,10 @@ class NotionConnector:
                 "Content-Type": "application/json",
                 "Notion-Version": "2022-06-28"
             }
+            
+            # Инициализируем CoinGeckoAPI с правильными параметрами
+            self.coingecko_api = CoinGeckoAPI(notion_headers=self.headers, notion_base_url=self.base_url)
+            
             logger.info("HTTP клиент Notion успешно инициализирован")
             return True
             
