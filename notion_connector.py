@@ -32,7 +32,7 @@ class NotionConnector:
         self.database_id: Optional[str] = None
         self.base_url = "https://api.notion.com/v1"
         self.headers = {}
-        self.coingecko_api = CoinGeckoAPI()
+        self.coingecko_api = CoinGeckoAPI(notion_headers=self.headers, notion_base_url=self.base_url)
         self.cryptocurrencies = []
         
     def load_environment_variables(self) -> bool:
@@ -402,13 +402,16 @@ class NotionConnector:
 class CoinGeckoAPI:
     """Класс для работы с CoinGecko API"""
     
-    def __init__(self):
+    def __init__(self, notion_headers=None, notion_base_url=None):
         self.base_url = "https://api.coingecko.com/api/v3"
         self.session = requests.Session()
         self.session.headers.update({
             'Accept': 'application/json',
             'User-Agent': 'Notion-Crypto-Tracker/1.0'
         })
+        # Параметры для обновления Notion
+        self.notion_headers = notion_headers
+        self.notion_base_url = notion_base_url
     
     def search_cryptocurrency(self, name: str, symbol: str = None) -> Optional[Dict[str, Any]]:
         """Поиск криптовалюты по названию или символу"""
@@ -579,11 +582,11 @@ class CoinGeckoAPI:
         
         # Обновляем курсы в Notion БД
         if updated_cryptos:
-            self.update_notion_database(updated_cryptos)
+            self.update_notion_database(updated_cryptos, self.notion_headers, self.notion_base_url)
         
         return updated_cryptos
     
-    def update_notion_database(self, updated_cryptos: List[Dict[str, Any]]):
+    def update_notion_database(self, updated_cryptos: List[Dict[str, Any]], notion_headers: Dict[str, str], notion_base_url: str):
         """Обновляет курсы в базе данных Notion"""
         logger.info("=== ОБНОВЛЕНИЕ КУРСОВ В NOTION ===")
         
@@ -611,8 +614,8 @@ class CoinGeckoAPI:
                 }
                 
                 # Отправляем PATCH запрос для обновления записи
-                url = f"{self.base_url}/pages/{page_id}"
-                response = requests.patch(url, json=payload, headers=self.headers)
+                url = f"{notion_base_url}/pages/{page_id}"
+                response = requests.patch(url, json=payload, headers=notion_headers)
                 response.raise_for_status()
                 
                 success_count += 1
