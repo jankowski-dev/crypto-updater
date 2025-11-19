@@ -204,6 +204,25 @@ class NotionConnector:
             logger.error(f"Ошибка при обновлении курсов: {e}")
             return False
         
+    def run_connection_test(self) -> bool:
+        """Запускает полный тест подключения"""
+        logger.info("Начинаем тестирование подключения к Notion...")
+
+        # Загружаем переменные среды
+        if not self.load_environment_variables():
+            return False
+        
+        # Инициализируем клиент
+        if not self.initialize_client():
+            return False
+        
+        # Тестируем подключение
+        if not self.test_connection():
+            return False
+        
+        logger.info("Все тесты пройдены успешно!")
+        return True
+        
 
 class CoinGeckoAPI:
     """Класс для работы с CoinGecko API"""
@@ -353,25 +372,6 @@ class CoinGeckoAPI:
         logger.info(f"=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Обработано {len(updated_cryptos)} криптовалют ===")
         return updated_cryptos
     
-    def run_connection_test(self) -> bool:
-        """Запускает полный тест подключения"""
-        logger.info("Начинаем тестирование подключения к Notion...")
-        
-        # Загружаем переменные среды
-        if not self.load_environment_variables():
-            return False
-        
-        # Инициализируем клиент
-        if not self.initialize_client():
-            return False
-        
-        # Тестируем подключение
-        if not self.test_connection():
-            return False
-        
-        logger.info("Все тесты пройдены успешно!")
-        return True
-
 
 def main():
     """Основная функция"""
