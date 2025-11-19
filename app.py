@@ -6,8 +6,8 @@ import requests
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-os.environ["NOTION_API_KEY"] = "secret_xxx"
-os.environ["NOTION_DATABASE_ID"] = "your-database-id"
+os.environ["NOTION_API_KEY"] = os.environ.get('NOTION_API_KEY')
+os.environ["NOTION_DATABASE_ID"] = os.environ.get('NOTION_DATABASE_ID')
 os.environ["COINGECKO_CHUNK_SIZE"] = "200"
 os.environ["LOG_LEVEL"] = "INFO"
 
