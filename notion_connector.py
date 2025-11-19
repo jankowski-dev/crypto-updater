@@ -76,7 +76,7 @@ class NotionConnector:
             logger.info(f"ID базы данных: {self.database_id}")
             
             # Получаем количество записей
-            query_result = self.client.databases.query(database_id=self.database_id)
+            query_result = self.client.databases.list(database_id=self.database_id)
             records_count = len(query_result.get('results', []))
             logger.info(f"Количество записей в базе: {records_count}")
             
