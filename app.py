@@ -7,9 +7,6 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 
-os.environ["COINGECKO_CHUNK_SIZE"] = "200"
-os.environ["LOG_LEVEL"] = "INFO"
-
 # Настройка логирования
 def setup_logging():
     log_level_str = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -101,7 +98,7 @@ class NotionClient:
             return True
         except requests.RequestException as e:
             logging.error(f"Критическая ошибка при обновлении страницы {page_id}: {e}")
-            if response.status_code == 401:
+            if response and response.status_code == 401:
                 logging.critical("Ошибка аутентификации в Notion. Проверьте NOTION_API_KEY.")
                 raise SystemExit(1)
             return False
