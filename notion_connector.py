@@ -608,8 +608,7 @@ class CoinGeckoAPI:
                 
                 payload = {
                     "properties": {
-                        "Price": {"number": float(price)},
-                        "Last Updated": {"date": {"start": current_time}}
+                        "Price": {"number": float(price)}
                     }
                 }
                 
