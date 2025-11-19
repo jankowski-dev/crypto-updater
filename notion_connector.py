@@ -7,7 +7,9 @@
 import os
 import sys
 import logging
-from typing import Optional
+import requests
+import json
+from typing import Optional, List, Dict, Any
 from notion_client import Client
 
 # Настройка логирования
@@ -28,6 +30,8 @@ class NotionConnector:
         self.token: Optional[str] = None
         self.database_id: Optional[str] = None
         self.client: Optional[Client] = None
+        self.coingecko_api = CoinGeckoAPI()
+        self.cryptocurrencies = []
         
     def load_environment_variables(self) -> bool:
         """Загружает переменные среды"""
@@ -75,14 +79,279 @@ class NotionConnector:
             logger.info(f"Название базы данных: {database.get('title', [{}])[0].get('plain_text', 'Неизвестно')}")
             logger.info(f"ID базы данных: {self.database_id}")
             
-            # Подключение успешно - база данных доступна
-            logger.info("База данных успешно прочитана и доступна для работы")
+            # Анализируем структуру базы данных
+            self.analyze_database_structure(database)
+            
+            # Получаем записи из базы
+            self.get_database_records()
             
             return True
             
         except Exception as e:
             logger.error(f"Ошибка при подключении к базе данных Notion: {e}")
             return False
+    
+    def analyze_database_structure(self, database):
+        """Анализирует структуру базы данных"""
+        logger.info("=== АНАЛИЗ СТРУКТУРЫ БАЗЫ ДАННЫХ ===")
+        
+        properties = database.get('properties', {})
+        logger.info(f"Количество полей в базе: {len(properties)}")
+        
+        for field_name, field_info in properties.items():
+            field_type = field_info.get('type', 'unknown')
+            logger.info(f"Поле: '{field_name}' - Тип: {field_type}")
+        
+        logger.info("=== КОНЕЦ АНАЛИЗА СТРУКТУРЫ ===")
+    
+    def get_database_records(self):
+        """Получает записи из базы данных"""
+        logger.info("=== ПОЛУЧЕНИЕ ЗАПИСЕЙ ИЗ БАЗЫ ===")
+        
+        try:
+            # Получаем все записи из базы
+            records = []
+            has_more = True
+            start_cursor = None
+            
+            while has_more:
+                query_params = {
+                    'database_id': self.database_id,
+                    'page_size': 100
+                }
+                
+                if start_cursor:
+                    query_params['start_cursor'] = start_cursor
+                
+                result = self.client.databases.query(**query_params)
+                records.extend(result.get('results', []))
+                has_more = result.get('has_more', False)
+                start_cursor = result.get('next_cursor', None)
+                
+                logger.info(f"Получено записей: {len(records)}")
+            
+            logger.info(f"Всего записей в базе: {len(records)}")
+            
+            # Анализируем записи для поиска криптовалют
+            self.analyze_cryptocurrencies(records)
+            
+            # Обновляем курсы криптовалют
+            self.update_crypto_prices()
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении записей: {e}")
+    
+    def analyze_cryptocurrencies(self, records):
+        """Анализирует записи для поиска криптовалют"""
+        logger.info("=== ПОИСК КРИПТОВАЛЮТ ===")
+        
+        cryptocurrencies = []
+        
+        for record in records:
+            # Получаем название криптовалюты
+            crypto_name = None
+            crypto_symbol = None
+            
+            # Ищем поля с названием и символом
+            for field_name, field_value in record.get('properties', {}).items():
+                if field_name.lower() in ['name', 'название', 'crypto', 'coin', 'currency']:
+                    if field_value.get('title'):
+                        crypto_name = field_value['title'][0]['plain_text']
+                elif field_name.lower() in ['symbol', 'символ', 'ticker']:
+                    if field_value.get('rich_text'):
+                        crypto_symbol = field_value['rich_text'][0]['plain_text']
+            
+            if crypto_name:
+                crypto_data = {
+                    'name': crypto_name,
+                    'symbol': crypto_symbol or '',
+                    'page_id': record['id']
+                }
+                cryptocurrencies.append(crypto_data)
+                logger.info(f"Найдена криптовалюта: {crypto_name} ({crypto_symbol})")
+        
+        logger.info(f"Всего найдено криптовалют: {len(cryptocurrencies)}")
+        
+        # Сохраняем список криптовалют для дальнейшего использования
+        self.cryptocurrencies = cryptocurrencies
+        
+        logger.info("=== КОНЕЦ ПОИСКА КРИПТОВАЛЮТ ===")
+    
+    def update_crypto_prices(self) -> bool:
+        """Обновляет курсы криптовалют из CoinGecko"""
+        try:
+            if not self.cryptocurrencies:
+                logger.warning("Список криптовалют пуст. Сначала нужно просканировать базу данных.")
+                return False
+            
+            logger.info("Начинаем обновление курсов криптовалют...")
+            
+            # Обновляем курсы через CoinGecko API
+            updated_data = self.coingecko_api.update_crypto_rates(self.cryptocurrencies)
+            
+            if updated_data:
+                logger.info(f"✅ Успешно обновлены курсы для {len(updated_data)} криптовалют")
+                
+                # Сохраняем обновленные данные
+                self.updated_crypto_data = updated_data
+                
+                return True
+            else:
+                logger.error("❌ Не удалось обновить курсы криптовалют")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Ошибка при обновлении курсов: {e}")
+            return False
+        
+
+class CoinGeckoAPI:
+    """Класс для работы с CoinGecko API"""
+    
+    def __init__(self):
+        self.base_url = "https://api.coingecko.com/api/v3"
+        self.session = requests.Session()
+        self.session.headers.update({
+            'Accept': 'application/json',
+            'User-Agent': 'Notion-Crypto-Tracker/1.0'
+        })
+    
+    def search_cryptocurrency(self, name: str, symbol: str = None) -> Optional[Dict[str, Any]]:
+        """Поиск криптовалюты по названию или символу"""
+        try:
+            # Сначала пробуем найти по символу
+            if symbol:
+                logger.info(f"Поиск криптовалюты по символу: {symbol}")
+                search_url = f"{self.base_url}/search"
+                params = {'query': symbol}
+                
+                response = self.session.get(search_url, params=params)
+                response.raise_for_status()
+                
+                data = response.json()
+                coins = data.get('coins', [])
+                
+                # Ищем точное совпадение по символу
+                for coin in coins:
+                    if coin.get('symbol', '').upper() == symbol.upper():
+                        logger.info(f"Найдена криптовалюта по символу: {coin['name']} ({coin['symbol']})")
+                        return coin
+            
+            # Если не нашли по символу, ищем по названию
+            logger.info(f"Поиск криптовалюты по названию: {name}")
+            search_url = f"{self.base_url}/search"
+            params = {'query': name}
+            
+            response = self.session.get(search_url, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            coins = data.get('coins', [])
+            
+            # Ищем точное совпадение по названию
+            for coin in coins:
+                if coin.get('name', '').lower() == name.lower():
+                    logger.info(f"Найдена криптовалюта по названию: {coin['name']} ({coin['symbol']})")
+                    return coin
+            
+            # Если точное совпадение не найдено, берем первую из результатов
+            if coins:
+                coin = coins[0]
+                logger.info(f"Используем ближайшее совпадение: {coin['name']} ({coin['symbol']})")
+                return coin
+            
+            logger.warning(f"Криптовалюта не найдена: {name} ({symbol})")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка при поиске криптовалюты {name}: {e}")
+            return None
+    
+    def get_price_data(self, coin_id: str, vs_currency: str = 'usd') -> Optional[Dict[str, Any]]:
+        """Получает данные о цене криптовалюты"""
+        try:
+            url = f"{self.base_url}/simple/price"
+            params = {
+                'ids': coin_id,
+                'vs_currencies': vs_currency,
+                'include_24hr_change': 'true',
+                'include_market_cap': 'true',
+                'include_24hr_vol': 'true'
+            }
+            
+            response = self.session.get(url, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            
+            if coin_id in data:
+                price_info = data[coin_id]
+                logger.info(f"Получены данные для {coin_id}: ${price_info.get(vs_currency, 'N/A')}")
+                return price_info
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении цены для {coin_id}: {e}")
+            return None
+    
+    def update_crypto_rates(self, cryptocurrencies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Обновляет курсы для списка криптовалют"""
+        logger.info("=== ОБНОВЛЕНИЕ КУРСОВ КРИПТОВАЛЮТ ===")
+        
+        updated_cryptos = []
+        
+        for crypto in cryptocurrencies:
+            crypto_name = crypto['name']
+            crypto_symbol = crypto['symbol']
+            page_id = crypto['page_id']
+            
+            logger.info(f"Обработка: {crypto_name} ({crypto_symbol})")
+            
+            # Ищем криптовалюту в CoinGecko
+            coin_info = self.search_cryptocurrency(crypto_name, crypto_symbol)
+            
+            if not coin_info:
+                logger.warning(f"Не удалось найти {crypto_name} в CoinGecko")
+                continue
+            
+            coin_id = coin_info['id']
+            
+            # Получаем данные о цене
+            price_data = self.get_price_data(coin_id)
+            
+            if not price_data:
+                logger.warning(f"Не удалось получить цену для {crypto_name}")
+                continue
+            
+            # Формируем обновленные данные
+            updated_crypto = {
+                'page_id': page_id,
+                'name': crypto_name,
+                'symbol': crypto_symbol,
+                'coingecko_id': coin_id,
+                'price_usd': price_data.get('usd'),
+                'price_change_24h': price_data.get('usd_24h_change'),
+                'market_cap': price_data.get('usd_market_cap'),
+                'volume_24h': price_data.get('usd_24h_vol')
+            }
+            
+            updated_cryptos.append(updated_crypto)
+            
+            # Логируем результаты
+            price = updated_crypto['price_usd']
+            change_24h = updated_crypto['price_change_24h']
+            
+            if price:
+                logger.info(f"✅ {crypto_name}: ${price:,.2f}")
+                if change_24h is not None:
+                    change_symbol = "📈" if change_24h > 0 else "📉"
+                    logger.info(f"   {change_symbol} 24h изменение: {change_24h:+.2f}%")
+            else:
+                logger.warning(f"⚠️ {crypto_name}: цена не найдена")
+        
+        logger.info(f"=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Обработано {len(updated_cryptos)} криптовалют ===")
+        return updated_cryptos
     
     def run_connection_test(self) -> bool:
         """Запускает полный тест подключения"""
