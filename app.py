@@ -112,8 +112,8 @@ def main():
     setup_logging()
 
     # Проверка обязательных переменных окружения
-    notion_api_key = os.environ.get("NOTION_API_KEY")
-    notion_database_id = os.environ.get("NOTION_DATABASE_ID")
+    notion_api_key = os.getenv("NOTION_API_KEY")
+    notion_database_id = os.getenv("NOTION_DATABASE_ID")
 
     if not notion_api_key:
         logging.critical("Переменная окружения NOTION_API_KEY не установлена. Скрипт остановлен.")
