@@ -82,8 +82,8 @@ class NotionConnector:
             # Анализируем структуру базы данных
             self.analyze_database_structure(database)
             
-            # Получаем записи из базы
-            self.get_database_records()
+            # Получаем записи из базы (временно отключено для отладки)
+            # self.get_database_records()
             
             return True
             
@@ -95,12 +95,17 @@ class NotionConnector:
         """Анализирует структуру базы данных"""
         logger.info("=== АНАЛИЗ СТРУКТУРЫ БАЗЫ ДАННЫХ ===")
         
+        logger.info(f"Полная информация о базе: {database}")
+        
         properties = database.get('properties', {})
         logger.info(f"Количество полей в базе: {len(properties)}")
         
-        for field_name, field_info in properties.items():
-            field_type = field_info.get('type', 'unknown')
-            logger.info(f"Поле: '{field_name}' - Тип: {field_type}")
+        if not properties:
+            logger.warning("Поля базы данных не найдены или недоступны")
+        else:
+            for field_name, field_info in properties.items():
+                field_type = field_info.get('type', 'unknown')
+                logger.info(f"Поле: '{field_name}' - Тип: {field_type}")
         
         logger.info("=== КОНЕЦ АНАЛИЗА СТРУКТУРЫ ===")
     
@@ -143,8 +148,8 @@ class NotionConnector:
             # Анализируем записи для поиска криптовалют
             self.analyze_cryptocurrencies(records)
             
-            # Обновляем курсы криптовалют
-            self.update_crypto_prices()
+            # Обновляем курсы криптовалют (временно отключено для отладки)
+            # self.update_crypto_prices()
             
         except Exception as e:
             logger.error(f"Ошибка при получении записей: {e}")
