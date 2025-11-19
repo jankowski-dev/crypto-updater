@@ -115,20 +115,28 @@ class NotionConnector:
             start_cursor = None
             
             while has_more:
+                # Используем pages.list для получения записей из базы
                 query_params = {
-                    'database_id': self.database_id,
                     'page_size': 100
                 }
                 
                 if start_cursor:
                     query_params['start_cursor'] = start_cursor
                 
-                result = self.client.databases.query(**query_params)
-                records.extend(result.get('results', []))
+                # Фильтруем страницы по базе данных
+                result = self.client.pages.list(**query_params)
+                
+                # Фильтруем только страницы, принадлежащие нашей базе
+                database_pages = []
+                for page in result.get('results', []):
+                    if page.get('parent', {}).get('database_id') == self.database_id:
+                        database_pages.append(page)
+                
+                records.extend(database_pages)
                 has_more = result.get('has_more', False)
                 start_cursor = result.get('next_cursor', None)
                 
-                logger.info(f"Получено записей: {len(records)}")
+                logger.info(f"Получено записей из базы: {len(database_pages)}")
             
             logger.info(f"Всего записей в базе: {len(records)}")
             
