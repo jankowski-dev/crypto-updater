@@ -82,8 +82,8 @@ class NotionConnector:
             # Анализируем структуру базы данных
             self.analyze_database_structure(database)
             
-            # Получаем записи из базы (временно отключено для отладки)
-            # self.get_database_records()
+            # Попробуем получить записи напрямую
+            self.get_database_records_simple()
             
             return True
             
@@ -189,6 +189,116 @@ class NotionConnector:
         self.cryptocurrencies = cryptocurrencies
         
         logger.info("=== КОНЕЦ ПОИСКА КРИПТОВАЛЮТ ===")
+    
+    def get_database_records_simple(self):
+        """Упрощенное получение записей из базы"""
+        logger.info("=== ПОЛУЧЕНИЕ ЗАПИСЕЙ (УПРОЩЕННЫЙ МЕТОД) ===")
+        
+        try:
+            # Попробуем разные методы для получения записей
+            
+            # Метод 1: Попробуем query с базовыми параметрами
+            logger.info("Пробуем метод 1: databases.query")
+            try:
+                result = self.client.databases.query(
+                    database_id=self.database_id,
+                    page_size=100
+                )
+                records = result.get('results', [])
+                logger.info(f"Метод 1 успешен! Получено {len(records)} записей")
+                
+                if records:
+                    self.analyze_simple_records(records)
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"Метод 1 не сработал: {e}")
+            
+            # Метод 2: Попробуем получить через страницы
+            logger.info("Пробуем метод 2: через страницы")
+            try:
+                # Получаем все страницы
+                pages_result = self.client.search(
+                    filter={
+                        'value': 'page',
+                        'property': 'object'
+                    },
+                    sort={
+                        'direction': 'descending',
+                        'timestamp': 'last_edited_time'
+                    }
+                )
+                
+                pages = pages_result.get('results', [])
+                database_pages = []
+                
+                # Фильтруем страницы по базе
+                for page in pages:
+                    parent = page.get('parent', {})
+                    if parent.get('database_id') == self.database_id:
+                        database_pages.append(page)
+                
+                logger.info(f"Метод 2: найдено {len(database_pages)} страниц в базе")
+                
+                if database_pages:
+                    self.analyze_simple_records(database_pages)
+                    return
+                    
+            except Exception as e:
+                logger.warning(f"Метод 2 не сработал: {e}")
+            
+            logger.warning("Ни один метод не сработал для получения записей")
+            
+        except Exception as e:
+            logger.error(f"Ошибка в упрощенном получении записей: {e}")
+    
+    def analyze_simple_records(self, records):
+        """Анализ записей в упрощенном режиме"""
+        logger.info("=== АНАЛИЗ ЗАПИСЕЙ (УПРОЩЕННЫЙ) ===")
+        
+        cryptocurrencies = []
+        
+        for i, record in enumerate(records[:5]):  # Ограничиваем до 5 записей для отладки
+            logger.info(f"Анализируем запись {i+1}: {record.get('id', 'NO_ID')}")
+            
+            # Ищем название в разных местах
+            crypto_name = None
+            crypto_symbol = None
+            
+            # Проверяем title
+            if record.get('properties'):
+                for field_name, field_value in record['properties'].items():
+                    if field_name.lower() in ['name', 'название']:
+                        if field_value.get('title'):
+                            crypto_name = field_value['title'][0]['plain_text']
+                    elif field_name.lower() in ['symbol', 'символ']:
+                        if field_value.get('rich_text'):
+                            crypto_symbol = field_value['rich_text'][0]['plain_text']
+            
+            # Если не нашли в properties, ищем в других местах
+            if not crypto_name:
+                # Проверяем заголовок страницы
+                if record.get('properties', {}).get('title'):
+                    crypto_name = record['properties']['title'][0]['plain_text']
+                elif record.get('url'):
+                    # Используем часть URL как название
+                    crypto_name = f"Запись_{i+1}"
+            
+            if crypto_name:
+                crypto_data = {
+                    'name': crypto_name,
+                    'symbol': crypto_symbol or '',
+                    'page_id': record['id']
+                }
+                cryptocurrencies.append(crypto_data)
+                logger.info(f"Найдена криптовалюта: {crypto_name} ({crypto_symbol})")
+        
+        logger.info(f"Всего найдено криптовалют: {len(cryptocurrencies)}")
+        
+        # Сохраняем список криптовалют
+        self.cryptocurrencies = cryptocurrencies
+        
+        logger.info("=== КОНЕЦ УПРОЩЕННОГО АНАЛИЗА ===")
     
     def update_crypto_prices(self) -> bool:
         """Обновляет курсы криптовалют из CoinGecko"""
