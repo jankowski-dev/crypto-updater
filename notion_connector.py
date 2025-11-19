@@ -75,10 +75,8 @@ class NotionConnector:
             logger.info(f"Название базы данных: {database.get('title', [{}])[0].get('plain_text', 'Неизвестно')}")
             logger.info(f"ID базы данных: {self.database_id}")
             
-            # Получаем количество записей
-            query_result = self.client.databases.list(database_id=self.database_id)
-            records_count = len(query_result.get('results', []))
-            logger.info(f"Количество записей в базе: {records_count}")
+            # Подключение успешно - база данных доступна
+            logger.info("База данных успешно прочитана и доступна для работы")
             
             return True
             
