@@ -9,6 +9,7 @@ import sys
 import logging
 import requests
 import json
+import time
 from typing import Optional, List, Dict, Any
 
 # Настройка логирования
@@ -488,62 +489,119 @@ class CoinGeckoAPI:
             return None
     
     def update_crypto_rates(self, cryptocurrencies: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Обновляет курсы для списка криптовалют"""
+        """Обновляет курсы для списка криптовалют с оптимизацией запросов"""
         logger.info("=== ОБНОВЛЕНИЕ КУРСОВ КРИПТОВАЛЮТ ===")
         
-        updated_cryptos = []
+        # Сначала ищем все криптовалюты
+        logger.info("Этап 1: Поиск криптовалют в CoinGecko...")
+        coin_mapping = {}
         
         for crypto in cryptocurrencies:
             crypto_name = crypto['name']
             crypto_symbol = crypto['symbol']
             page_id = crypto['page_id']
             
-            logger.info(f"Обработка: {crypto_name} ({crypto_symbol})")
+            logger.info(f"Поиск: {crypto_name} ({crypto_symbol})")
             
             # Ищем криптовалюту в CoinGecko
             coin_info = self.search_cryptocurrency(crypto_name, crypto_symbol)
             
-            if not coin_info:
-                logger.warning(f"Не удалось найти {crypto_name} в CoinGecko")
-                continue
-            
-            coin_id = coin_info['id']
-            
-            # Получаем данные о цене
-            price_data = self.get_price_data(coin_id)
-            
-            if not price_data:
-                logger.warning(f"Не удалось получить цену для {crypto_name}")
-                continue
-            
-            # Формируем обновленные данные
-            updated_crypto = {
-                'page_id': page_id,
-                'name': crypto_name,
-                'symbol': crypto_symbol,
-                'coingecko_id': coin_id,
-                'price_usd': price_data.get('usd'),
-                'price_change_24h': price_data.get('usd_24h_change'),
-                'market_cap': price_data.get('usd_market_cap'),
-                'volume_24h': price_data.get('usd_24h_vol')
-            }
-            
-            updated_cryptos.append(updated_crypto)
-            
-            # Логируем результаты
-            price = updated_crypto['price_usd']
-            change_24h = updated_crypto['price_change_24h']
-            
-            if price:
-                logger.info(f"✅ {crypto_name}: ${price:,.2f}")
-                if change_24h is not None:
-                    change_symbol = "📈" if change_24h > 0 else "📉"
-                    logger.info(f"   {change_symbol} 24h изменение: {change_24h:+.2f}%")
+            if coin_info:
+                coin_mapping[coin_info['id']] = {
+                    'page_id': page_id,
+                    'name': crypto_name,
+                    'symbol': crypto_symbol,
+                    'coingecko_id': coin_info['id']
+                }
+                logger.info(f"✅ Найден: {coin_info['name']} ({coin_info['symbol']})")
             else:
-                logger.warning(f"⚠️ {crypto_name}: цена не найдена")
+                logger.warning(f"❌ Не найден: {crypto_name}")
+            
+            # Задержка между поисковыми запросами
+            import time
+            time.sleep(0.5)
+        
+        if not coin_mapping:
+            logger.warning("Не найдено ни одной криптовалюты")
+            return []
+        
+        # Получаем цены батчами
+        logger.info(f"Этап 2: Получение цен для {len(coin_mapping)} криптовалют...")
+        updated_cryptos = []
+        coin_ids = list(coin_mapping.keys())
+        
+        # Разбиваем на батчи по 10 монет (лимит CoinGecko)
+        batch_size = 10
+        for i in range(0, len(coin_ids), batch_size):
+            batch = coin_ids[i:i + batch_size]
+            logger.info(f"Обрабатываем батч {i//batch_size + 1}: {len(batch)} монет")
+            
+            # Получаем цены для батча
+            batch_prices = self.get_batch_prices(batch)
+            
+            # Обрабатываем результаты
+            for coin_id in batch:
+                if coin_id in batch_prices:
+                    price_data = batch_prices[coin_id]
+                    coin_info = coin_mapping[coin_id]
+                    
+                    updated_crypto = {
+                        'page_id': coin_info['page_id'],
+                        'name': coin_info['name'],
+                        'symbol': coin_info['symbol'],
+                        'coingecko_id': coin_id,
+                        'price_usd': price_data.get('usd'),
+                        'price_change_24h': price_data.get('usd_24h_change'),
+                        'market_cap': price_data.get('usd_market_cap'),
+                        'volume_24h': price_data.get('usd_24h_vol')
+                    }
+                    
+                    updated_cryptos.append(updated_crypto)
+                    
+                    # Логируем результаты
+                    price = updated_crypto['price_usd']
+                    change_24h = updated_crypto['price_change_24h']
+                    
+                    if price:
+                        logger.info(f"✅ {coin_info['name']}: ${price:,.2f}")
+                        if change_24h is not None:
+                            change_symbol = "📈" if change_24h > 0 else "📉"
+                            logger.info(f"   {change_symbol} 24h изменение: {change_24h:+.2f}%")
+                    else:
+                        logger.warning(f"⚠️ {coin_info['name']}: цена не найдена")
+            
+            # Задержка между батчами
+            if i + batch_size < len(coin_ids):
+                logger.info("Пауза между батчами...")
+                import time
+                time.sleep(2)
         
         logger.info(f"=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Обработано {len(updated_cryptos)} криптовалют ===")
         return updated_cryptos
+    
+    def get_batch_prices(self, coin_ids: List[str]) -> Dict[str, Any]:
+        """Получает цены для списка монет одним запросом"""
+        try:
+            coin_ids_str = ",".join(coin_ids)
+            url = f"{self.base_url}/simple/price"
+            params = {
+                'ids': coin_ids_str,
+                'vs_currencies': 'usd',
+                'include_24hr_change': 'true',
+                'include_market_cap': 'true',
+                'include_24hr_vol': 'true'
+            }
+
+            response = self.session.get(url, params=params)
+            response.raise_for_status()
+            
+            data = response.json()
+            logger.info(f"Получены данные для {len(data)} монет")
+            return data
+            
+        except Exception as e:
+            logger.error(f"Ошибка при получении цен для батча: {e}")
+            return {}
     
 
 def main():
