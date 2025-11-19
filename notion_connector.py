@@ -250,27 +250,10 @@ class NotionConnector:
             logger.warning("Ни один метод не сработал для получения записей")
             
             # Метод 3: Получаем содержимое блока-родителя
-            logger.info("Пробуем метод 3: через блок-родитель")
-            try:
-                parent_block_id = database.get('parent', {}).get('block_id')
-                if parent_block_id:
-                    logger.info(f"Получаем содержимое блока: {parent_block_id}")
-                    blocks_result = self.client.blocks.children.list(block_id=parent_block_id)
-                    blocks = blocks_result.get('results', [])
-                    logger.info(f"Метод 3: найдено {len(blocks)} блоков")
-                    
-                    # Ищем базу данных среди блоков
-                    for block in blocks:
-                        if block.get('type') == 'child_database':
-                            logger.info(f"Найдена дочерняя база: {block.get('id')}")
-                            # Попробуем получить записи из этой базы
-                            self.try_get_child_database_records(block.get('id'))
-                            return
-                else:
-                    logger.warning("Не найден parent_block_id")
-                    
-            except Exception as e:
-                logger.warning(f"Метод 3 не сработал: {e}")
+            self.try_method_3_blocks()
+            
+        except Exception as e:
+            logger.error(f"Ошибка в упрощенном получении записей: {e}")
     
     def try_get_child_database_records(self, child_db_id):
         """Пробуем получить записи из дочерней базы"""
@@ -290,6 +273,33 @@ class NotionConnector:
                 
         except Exception as e:
             logger.error(f"Ошибка при получении записей дочерней базы: {e}")
+    
+    def try_method_3_blocks(self):
+        """Метод 3: получаем содержимое блока-родителя"""
+        logger.info("Пробуем метод 3: через блок-родитель")
+        try:
+            # Получаем информацию о базе для получения parent_block_id
+            database = self.client.databases.retrieve(database_id=self.database_id)
+            parent_block_id = database.get('parent', {}).get('block_id')
+            
+            if parent_block_id:
+                logger.info(f"Получаем содержимое блока: {parent_block_id}")
+                blocks_result = self.client.blocks.children.list(block_id=parent_block_id)
+                blocks = blocks_result.get('results', [])
+                logger.info(f"Метод 3: найдено {len(blocks)} блоков")
+                
+                # Ищем базу данных среди блоков
+                for block in blocks:
+                    if block.get('type') == 'child_database':
+                        logger.info(f"Найдена дочерняя база: {block.get('id')}")
+                        # Попробуем получить записи из этой базы
+                        self.try_get_child_database_records(block.get('id'))
+                        return
+            else:
+                logger.warning("Не найден parent_block_id")
+                
+        except Exception as e:
+            logger.warning(f"Метод 3 не сработал: {e}")
             
         except Exception as e:
             logger.error(f"Ошибка в упрощенном получении записей: {e}")
