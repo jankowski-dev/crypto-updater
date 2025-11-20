@@ -96,7 +96,7 @@ class NotionConnector:
             # Анализируем структуру базы данных
             self.analyze_database_structure(database)
             
-            # Получаем записи из базы
+            # Получаем записи из базы через прямые HTTP запросы
             self.get_database_records()
             
             return True
@@ -195,151 +195,25 @@ class NotionConnector:
         
         logger.info("=== КОНЕЦ ПОИСКА КРИПТОВАЛЮТ ===")
     
-    def get_database_records_simple(self):
-        """Упрощенное получение записей из базы"""
-        logger.info("=== ПОЛУЧЕНИЕ ЗАПИСЕЙ (УПРОЩЕННЫЙ МЕТОД) ===")
-        
-        try:
-            # Попробуем разные методы для получения записей
-            
-            # Метод 1: Попробуем query с базовыми параметрами
-            logger.info("Пробуем метод 1: databases.query")
-            try:
-                result = self.client.databases.query(
-                    database_id=self.database_id,
-                    page_size=100
-                )
-                records = result.get('results', [])
-                logger.info(f"Метод 1 успешен! Получено {len(records)} записей")
-                
-                if records:
-                    self.analyze_simple_records(records)
-                    return
-                    
-            except Exception as e:
-                logger.warning(f"Метод 1 не сработал: {e}")
-            
-            # Метод 2: Попробуем получить через страницы
-            logger.info("Пробуем метод 2: через страницы")
-            try:
-                # Получаем все страницы
-                pages_result = self.client.search(
-                    filter={
-                        'value': 'page',
-                        'property': 'object'
-                    },
-                    sort={
-                        'direction': 'descending',
-                        'timestamp': 'last_edited_time'
-                    }
-                )
-                
-                pages = pages_result.get('results', [])
-                database_pages = []
-                
-                # Фильтруем страницы по базе
-                for page in pages:
-                    parent = page.get('parent', {})
-                    if parent.get('database_id') == self.database_id:
-                        database_pages.append(page)
-                
-                logger.info(f"Метод 2: найдено {len(database_pages)} страниц в базе")
-                
-                if database_pages:
-                    self.analyze_simple_records(database_pages)
-                    return
-                    
-            except Exception as e:
-                logger.warning(f"Метод 2 не сработал: {e}")
-            
-            logger.warning("Ни один метод не сработал для получения записей")
-            
-            # Метод 3: Получаем содержимое блока-родителя
-            self.try_method_3_blocks()
-            
-        except Exception as e:
-            logger.error(f"Ошибка в упрощенном получении записей: {e}")
-    
-    def try_get_child_database_records(self, child_db_id):
-        """Пробуем получить записи из дочерней базы"""
-        logger.info(f"Пробуем получить записи из дочерней базы: {child_db_id}")
-        
-        try:
-            # Попробуем query для дочерней базы
-            result = self.client.databases.query(
-                database_id=child_db_id,
-                page_size=100
-            )
-            records = result.get('results', [])
-            logger.info(f"Найдено записей в дочерней базе: {len(records)}")
-            
-            if records:
-                self.analyze_simple_records(records)
-                
-        except Exception as e:
-            logger.error(f"Ошибка при получении записей дочерней базы: {e}")
-    
-    def try_method_3_blocks(self):
-        """Метод 3: получаем содержимое блока-родителя"""
-        logger.info("Пробуем метод 3: через блок-родитель")
-        try:
-            # Получаем информацию о базе для получения parent_block_id
-            database = self.client.databases.retrieve(database_id=self.database_id)
-            parent_block_id = database.get('parent', {}).get('block_id')
-            
-            if parent_block_id:
-                logger.info(f"Получаем содержимое блока: {parent_block_id}")
-                blocks_result = self.client.blocks.children.list(block_id=parent_block_id)
-                blocks = blocks_result.get('results', [])
-                logger.info(f"Метод 3: найдено {len(blocks)} блоков")
-                
-                # Ищем базу данных среди блоков
-                for block in blocks:
-                    if block.get('type') == 'child_database':
-                        logger.info(f"Найдена дочерняя база: {block.get('id')}")
-                        # Попробуем получить записи из этой базы
-                        self.try_get_child_database_records(block.get('id'))
-                        return
-            else:
-                logger.warning("Не найден parent_block_id")
-                
-        except Exception as e:
-            logger.warning(f"Метод 3 не сработал: {e}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка в упрощенном получении записей: {e}")
-    
-    def analyze_simple_records(self, records):
-        """Анализ записей в упрощенном режиме"""
-        logger.info("=== АНАЛИЗ ЗАПИСЕЙ (УПРОЩЕННЫЙ) ===")
+    def analyze_cryptocurrencies(self, records):
+        """Анализирует записи для поиска криптовалют"""
+        logger.info("=== ПОИСК КРИПТОВАЛЮТ ===")
         
         cryptocurrencies = []
         
-        for i, record in enumerate(records[:5]):  # Ограничиваем до 5 записей для отладки
-            logger.info(f"Анализируем запись {i+1}: {record.get('id', 'NO_ID')}")
-            
-            # Ищем название в разных местах
+        for record in records:
+            # Получаем название криптовалюты
             crypto_name = None
             crypto_symbol = None
             
-            # Проверяем title
-            if record.get('properties'):
-                for field_name, field_value in record['properties'].items():
-                    if field_name.lower() in ['name', 'название']:
-                        if field_value.get('title'):
-                            crypto_name = field_value['title'][0]['plain_text']
-                    elif field_name.lower() in ['symbol', 'символ']:
-                        if field_value.get('rich_text'):
-                            crypto_symbol = field_value['rich_text'][0]['plain_text']
-            
-            # Если не нашли в properties, ищем в других местах
-            if not crypto_name:
-                # Проверяем заголовок страницы
-                if record.get('properties', {}).get('title'):
-                    crypto_name = record['properties']['title'][0]['plain_text']
-                elif record.get('url'):
-                    # Используем часть URL как название
-                    crypto_name = f"Запись_{i+1}"
+            # Ищем поля с названием и символом
+            for field_name, field_value in record.get('properties', {}).items():
+                if field_name.lower() in ['name', 'название', 'title']:
+                    if field_value.get('title'):
+                        crypto_name = field_value['title'][0]['plain_text']
+                elif field_name.lower() in ['symbol', 'символ']:
+                    if field_value.get('rich_text'):
+                        crypto_symbol = field_value['rich_text'][0]['plain_text']
             
             if crypto_name:
                 crypto_data = {
@@ -352,10 +226,10 @@ class NotionConnector:
         
         logger.info(f"Всего найдено криптовалют: {len(cryptocurrencies)}")
         
-        # Сохраняем список криптовалют
+        # Сохраняем список криптовалют для дальнейшего использования
         self.cryptocurrencies = cryptocurrencies
         
-        logger.info("=== КОНЕЦ УПРОЩЕННОГО АНАЛИЗА ===")
+        logger.info("=== КОНЕЦ ПОИСКА КРИПТОВАЛЮТ ===")
     
     def update_crypto_prices(self) -> bool:
         """Обновляет курсы криптовалют из CoinGecko"""
