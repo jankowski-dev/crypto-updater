@@ -65,10 +65,11 @@ class NotionConnector:
                 "Notion-Version": "2022-06-28"
             }
             
-            # Инициализируем CoinGeckoAPI с правильными параметрами
+            logger.info("HTTP клиент Notion успешно инициализирован")
+            # Инициализируем CoinGeckoAPI после полной инициализации клиента Notion
             self.coingecko_api = CoinGeckoAPI(notion_headers=self.headers, notion_base_url=self.base_url)
             
-            logger.info("HTTP клиент Notion успешно инициализирован")
+            logger.info("CoinGeckoAPI успешно инициализирован")
             return True
             
         except Exception as e:
@@ -171,12 +172,20 @@ class NotionConnector:
             
             # Ищем поля с названием и символом
             for field_name, field_value in record.get('properties', {}).items():
-                if field_name.lower() in ['name', 'название', 'crypto', 'coin', 'currency']:
-                    if field_value.get('title'):
-                        crypto_name = field_value['title'][0]['plain_text']
+                if field_name.lower() in ['name', 'название', 'crypto', 'coin', 'currency', 'title']:
+                    if field_value.get('title') or field_value.get('rich_text'):
+                        # Проверяем оба типа полей
+                        if field_value.get('title'):
+                            crypto_name = field_value['title'][0]['plain_text']
+                        elif field_value.get('rich_text'):
+                            crypto_name = field_value['rich_text'][0]['plain_text']
+                        elif field_value.get('formula') and field_value['formula'].get('string'):
+                            crypto_name = field_value['formula']['string']
                 elif field_name.lower() in ['symbol', 'символ', 'ticker']:
                     if field_value.get('rich_text'):
                         crypto_symbol = field_value['rich_text'][0]['plain_text']
+                    elif field_value.get('formula') and field_value['formula'].get('string'):
+                        crypto_symbol = field_value['formula']['string']
             
             if crypto_name:
                 crypto_data = {
@@ -193,168 +202,6 @@ class NotionConnector:
         self.cryptocurrencies = cryptocurrencies
         
         logger.info("=== КОНЕЦ ПОИСКА КРИПТОВАЛЮТ ===")
-    
-    def get_database_records_simple(self):
-        """Упрощенное получение записей из базы"""
-        logger.info("=== ПОЛУЧЕНИЕ ЗАПИСЕЙ (УПРОЩЕННЫЙ МЕТОД) ===")
-        
-        try:
-            # Попробуем разные методы для получения записей
-            
-            # Метод 1: Попробуем query с базовыми параметрами
-            logger.info("Пробуем метод 1: databases.query")
-            try:
-                result = self.client.databases.query(
-                    database_id=self.database_id,
-                    page_size=100
-                )
-                records = result.get('results', [])
-                logger.info(f"Метод 1 успешен! Получено {len(records)} записей")
-                
-                if records:
-                    self.analyze_simple_records(records)
-                    return
-                    
-            except Exception as e:
-                logger.warning(f"Метод 1 не сработал: {e}")
-            
-            # Метод 2: Попробуем получить через страницы
-            logger.info("Пробуем метод 2: через страницы")
-            try:
-                # Получаем все страницы
-                pages_result = self.client.search(
-                    filter={
-                        'value': 'page',
-                        'property': 'object'
-                    },
-                    sort={
-                        'direction': 'descending',
-                        'timestamp': 'last_edited_time'
-                    }
-                )
-                
-                pages = pages_result.get('results', [])
-                database_pages = []
-                
-                # Фильтруем страницы по базе
-                for page in pages:
-                    parent = page.get('parent', {})
-                    if parent.get('database_id') == self.database_id:
-                        database_pages.append(page)
-                
-                logger.info(f"Метод 2: найдено {len(database_pages)} страниц в базе")
-                
-                if database_pages:
-                    self.analyze_simple_records(database_pages)
-                    return
-                    
-            except Exception as e:
-                logger.warning(f"Метод 2 не сработал: {e}")
-            
-            logger.warning("Ни один метод не сработал для получения записей")
-            
-            # Метод 3: Получаем содержимое блока-родителя
-            self.try_method_3_blocks()
-            
-        except Exception as e:
-            logger.error(f"Ошибка в упрощенном получении записей: {e}")
-    
-    def try_get_child_database_records(self, child_db_id):
-        """Пробуем получить записи из дочерней базы"""
-        logger.info(f"Пробуем получить записи из дочерней базы: {child_db_id}")
-        
-        try:
-            # Попробуем query для дочерней базы
-            result = self.client.databases.query(
-                database_id=child_db_id,
-                page_size=100
-            )
-            records = result.get('results', [])
-            logger.info(f"Найдено записей в дочерней базе: {len(records)}")
-            
-            if records:
-                self.analyze_simple_records(records)
-                
-        except Exception as e:
-            logger.error(f"Ошибка при получении записей дочерней базы: {e}")
-    
-    def try_method_3_blocks(self):
-        """Метод 3: получаем содержимое блока-родителя"""
-        logger.info("Пробуем метод 3: через блок-родитель")
-        try:
-            # Получаем информацию о базе для получения parent_block_id
-            database = self.client.databases.retrieve(database_id=self.database_id)
-            parent_block_id = database.get('parent', {}).get('block_id')
-            
-            if parent_block_id:
-                logger.info(f"Получаем содержимое блока: {parent_block_id}")
-                blocks_result = self.client.blocks.children.list(block_id=parent_block_id)
-                blocks = blocks_result.get('results', [])
-                logger.info(f"Метод 3: найдено {len(blocks)} блоков")
-                
-                # Ищем базу данных среди блоков
-                for block in blocks:
-                    if block.get('type') == 'child_database':
-                        logger.info(f"Найдена дочерняя база: {block.get('id')}")
-                        # Попробуем получить записи из этой базы
-                        self.try_get_child_database_records(block.get('id'))
-                        return
-            else:
-                logger.warning("Не найден parent_block_id")
-                
-        except Exception as e:
-            logger.warning(f"Метод 3 не сработал: {e}")
-            
-        except Exception as e:
-            logger.error(f"Ошибка в упрощенном получении записей: {e}")
-    
-    def analyze_simple_records(self, records):
-        """Анализ записей в упрощенном режиме"""
-        logger.info("=== АНАЛИЗ ЗАПИСЕЙ (УПРОЩЕННЫЙ) ===")
-        
-        cryptocurrencies = []
-        
-        for i, record in enumerate(records[:5]):  # Ограничиваем до 5 записей для отладки
-            logger.info(f"Анализируем запись {i+1}: {record.get('id', 'NO_ID')}")
-            
-            # Ищем название в разных местах
-            crypto_name = None
-            crypto_symbol = None
-            
-            # Проверяем title
-            if record.get('properties'):
-                for field_name, field_value in record['properties'].items():
-                    if field_name.lower() in ['name', 'название']:
-                        if field_value.get('title'):
-                            crypto_name = field_value['title'][0]['plain_text']
-                    elif field_name.lower() in ['symbol', 'символ']:
-                        if field_value.get('rich_text'):
-                            crypto_symbol = field_value['rich_text'][0]['plain_text']
-            
-            # Если не нашли в properties, ищем в других местах
-            if not crypto_name:
-                # Проверяем заголовок страницы
-                if record.get('properties', {}).get('title'):
-                    crypto_name = record['properties']['title'][0]['plain_text']
-                elif record.get('url'):
-                    # Используем часть URL как название
-                    crypto_name = f"Запись_{i+1}"
-            
-            if crypto_name:
-                crypto_data = {
-                    'name': crypto_name,
-                    'symbol': crypto_symbol or '',
-                    'page_id': record['id']
-                }
-                cryptocurrencies.append(crypto_data)
-                logger.info(f"Найдена криптовалюта: {crypto_name} ({crypto_symbol})")
-        
-        logger.info(f"Всего найдено криптовалют: {len(cryptocurrencies)}")
-        
-        # Сохраняем список криптовалют
-        self.cryptocurrencies = cryptocurrencies
-        
-        logger.info("=== КОНЕЦ УПРОЩЕННОГО АНАЛИЗА ===")
     
     def update_crypto_prices(self) -> bool:
         """Обновляет курсы криптовалют из CoinGecko"""
@@ -427,6 +274,14 @@ class CoinGeckoAPI:
                 params = {'query': symbol}
                 
                 response = self.session.get(search_url, params=params)
+                
+                if response.status_code == 429:
+                    # Обработка ошибки 429 (слишком много запросов)
+                    retry_after = int(response.headers.get('Retry-After', 10))
+                    logger.warning(f"Получена ошибка 429, ждем {retry_after} секунд...")
+                    time.sleep(retry_after)
+                    response = self.session.get(search_url, params=params)
+                
                 response.raise_for_status()
                 
                 data = response.json()
@@ -444,6 +299,14 @@ class CoinGeckoAPI:
             params = {'query': name}
             
             response = self.session.get(search_url, params=params)
+            
+            if response.status_code == 429:
+                # Обработка ошибки 429 (слишком много запросов)
+                retry_after = int(response.headers.get('Retry-After', 10))
+                logger.warning(f"Получена ошибка 429, ждем {retry_after} секунд...")
+                time.sleep(retry_after)
+                response = self.session.get(search_url, params=params)
+            
             response.raise_for_status()
             
             data = response.json()
@@ -481,6 +344,14 @@ class CoinGeckoAPI:
             }
             
             response = self.session.get(url, params=params)
+            
+            if response.status_code == 429:
+                # Обработка ошибки 429 (слишком много запросов)
+                retry_after = int(response.headers.get('Retry-After', 10))
+                logger.warning(f"Получена ошибка 429, ждем {retry_after} секунд...")
+                time.sleep(retry_after)
+                response = self.session.get(url, params=params)
+            
             response.raise_for_status()
             
             data = response.json()
@@ -525,8 +396,8 @@ class CoinGeckoAPI:
             else:
                 logger.warning(f"❌ Не найден: {crypto_name}")
             
-            # Задержка между поисковыми запросами (сильно увеличиваем)
-            time.sleep(5)
+            # Задержка между поисковыми запросами
+            time.sleep(2)
         
         if not coin_mapping:
             logger.warning("Не найдено ни одной криптовалюты")
@@ -577,10 +448,10 @@ class CoinGeckoAPI:
                     else:
                         logger.warning(f"⚠️ {coin_info['name']}: цена не найдена")
             
-            # Задержка между батчами (увеличиваем)
+            # Задержка между батчами
             if i + batch_size < len(coin_ids):
                 logger.info("Пауза между батчами...")
-                time.sleep(10)
+                time.sleep(5)
         
         logger.info(f"=== ОБНОВЛЕНИЕ ЗАВЕРШЕНО. Обработано {len(updated_cryptos)} криптовалют ===")
         
@@ -601,37 +472,81 @@ class CoinGeckoAPI:
             page_id = crypto['page_id']
             price = crypto['price_usd']
             crypto_name = crypto['name']
+            price_change_24h = crypto.get('price_change_24h')
+            market_cap = crypto.get('market_cap')
+            volume_24h = crypto.get('volume_24h')
             
             if not price:
                 logger.warning(f"Пропускаем {crypto_name}: нет цены")
                 continue
             
             try:
-                # Подготавливаем данные для обновления
-                payload = {
-                    "properties": {
-                        "Price": {"number": float(price)}
-                    }
-                }
+                # Подготавливаем данные для обновления с поддержкой разных названий полей
+                properties = {}
+                
+                # Попробуем разные возможные названия поля цены
+                possible_price_field_names = ["Price", "Цена", "Цена USD", "Price USD", "Current Price", "Current_Price"]
+                price_field_name = self.find_property_name(notion_headers, notion_base_url, page_id, possible_price_field_names)
+                
+                if price_field_name:
+                    properties[price_field_name] = {"number": float(price)}
+                
+                # Попробуем разные возможные названия поля изменения за 24ч
+                if price_change_24h is not None:
+                    possible_change_field_names = ["Change 24h", "Change_24h", "24h Change", "24h_Change", "Change", "Изменение", "Изменение 24ч"]
+                    change_field_name = self.find_property_name(notion_headers, notion_base_url, page_id, possible_change_field_names)
+                    
+                    if change_field_name:
+                        properties[change_field_name] = {"number": float(price_change_24h)}
+                
+                # Попробуем разные возможные названия поля рыночной капитализации
+                if market_cap is not None:
+                    possible_market_cap_field_names = ["Market Cap", "Market_Cap", "Market cap", "Market-cap", "Капитализация", "Рыночная капитализация"]
+                    market_cap_field_name = self.find_property_name(notion_headers, notion_base_url, page_id, possible_market_cap_field_names)
+                    
+                    if market_cap_field_name:
+                        properties[market_cap_field_name] = {"number": float(market_cap)}
+                
+                # Попробуем разные возможные названия поля объема за 24ч
+                if volume_24h is not None:
+                    possible_volume_field_names = ["Volume 24h", "Volume_24h", "Volume", "24h Volume", "Объем", "Объем 24ч"]
+                    volume_field_name = self.find_property_name(notion_headers, notion_base_url, page_id, possible_volume_field_names)
+                    
+                    if volume_field_name:
+                        properties[volume_field_name] = {"number": float(volume_24h)}
+                
+                if not properties:
+                    logger.warning(f"Не найдены подходящие поля для обновления в записи {crypto_name}")
+                    continue
+                
+                # Подготавливаем payload
+                payload = {"properties": properties}
                 
                 # Отладочная информация
                 logger.info(f"Обновляем {crypto_name}:")
                 logger.info(f"URL: {notion_base_url}/pages/{page_id}")
                 logger.info(f"Payload: {payload}")
-                logger.info(f"Headers: {notion_headers}")
                 
                 # Отправляем PATCH запрос для обновления записи
                 url = f"{notion_base_url}/pages/{page_id}"
                 response = requests.patch(url, json=payload, headers=notion_headers)
                 logger.info(f"Response status: {response.status_code}")
-                logger.info(f"Response text: {response.text}")
+                
+                if response.status_code == 429:
+                    # Обработка ошибки 429 (слишком много запросов)
+                    retry_after = int(response.headers.get('Retry-After', 10))
+                    logger.warning(f"Получена ошибка 429, ждем {retry_after} секунд...")
+                    time.sleep(retry_after)
+                    # Повторная попытка
+                    response = requests.patch(url, json=payload, headers=notion_headers)
+                
                 response.raise_for_status()
                 
                 success_count += 1
                 logger.info(f"✅ Обновлен {crypto_name}: ${price:,.2f}")
                 
-                # Небольшая задержка между обновлениями
-                time.sleep(0.5)
+                # Задержка между обновлениями для избежания 429 ошибок
+                time.sleep(1.5)
                 
             except Exception as e:
                 error_count += 1
@@ -641,6 +556,36 @@ class CoinGeckoAPI:
         logger.info(f"✅ Успешно обновлено: {success_count}")
         logger.info(f"❌ Ошибок: {error_count}")
         logger.info(f"📊 Всего обработано: {len(updated_cryptos)}")
+    
+    def find_property_name(self, notion_headers: Dict[str, str], notion_base_url: str, page_id: str, possible_names: List[str]) -> Optional[str]:
+        """Находит существующее имя свойства в Notion странице"""
+        try:
+            # Получаем информацию о странице
+            url = f"{notion_base_url}/pages/{page_id}"
+            response = requests.get(url, headers=notion_headers)
+            response.raise_for_status()
+            
+            page_info = response.json()
+            page_properties = page_info.get('properties', {})
+            
+            # Проверяем каждое возможное имя
+            for name in possible_names:
+                if name in page_properties:
+                    return name
+            
+            # Если точного совпадения нет, ищем по частичному совпадению
+            for name in possible_names:
+                for prop_name in page_properties.keys():
+                    if name.lower() in prop_name.lower():
+                        return prop_name
+            
+            # Если ничего не найдено, возвращаем первое возможное имя (пользователь должен настроить базу)
+            logger.warning(f"Не найдено поле для обновления, возможные варианты: {possible_names}")
+            return possible_names[0]
+            
+        except Exception as e:
+            logger.error(f"Ошибка при поиске имени свойства: {e}")
+            return None
     
     def get_batch_prices(self, coin_ids: List[str]) -> Dict[str, Any]:
         """Получает цены для списка монет одним запросом с retry"""
