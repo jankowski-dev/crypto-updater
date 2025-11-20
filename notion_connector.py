@@ -10,6 +10,7 @@ import logging
 import requests
 import json
 import time
+import concurrent.futures
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
@@ -590,57 +591,56 @@ class CoinGeckoAPI:
         
         return updated_cryptos
     
+    def update_single_page(self, update_data):
+        """Обновляет одну страницу в Notion"""
+        page_id, price, symbol = update_data
+        url = f"{self.notion_base_url}/pages/{page_id}"
+        payload = {
+            "properties": {
+                "Price": {"number": float(price)},
+                "Last Updated": {"date": {"start": datetime.now().isoformat()}}
+            }
+        }
+        
+        try:
+            response = requests.patch(url, json=payload, headers=self.notion_headers, timeout=10)
+            response.raise_for_status()
+            return symbol, True, None
+        except Exception as e:
+            return symbol, False, str(e)
+    
     def update_notion_database(self, updated_cryptos: List[Dict[str, Any]], notion_headers: Dict[str, str], notion_base_url: str):
-        """Обновляет курсы в базе данных Notion"""
-        logger.info("=== ОБНОВЛЕНИЕ КУРСОВ В NOTION ===")
-        
-        success_count = 0
-        error_count = 0
-        
-        for crypto in updated_cryptos:
-            page_id = crypto['page_id']
-            price = crypto['price_usd']
-            crypto_name = crypto['name']
+        """Обновляем базу данных Notion ОПТИМИЗИРОВАННО"""
+        try:
+            # Подготавливаем данные для обновления
+            updates_to_do = []
+            for crypto in updated_cryptos:
+                if crypto['price_usd']:
+                    updates_to_do.append((crypto['page_id'], crypto['price_usd'], crypto['symbol']))
             
-            if not price:
-                logger.warning(f"Пропускаем {crypto_name}: нет цены")
-                continue
+            logger.info(f"=== ОБНОВЛЕНИЕ КУРСОВ В NOTION ===")
+            logger.info(f"🔄 Планируем: {len(updates_to_do)} обновлений")
             
-            try:
-                # Подготавливаем данные для обновления
-                payload = {
-                    "properties": {
-                        "Price": {"number": float(price)}
-                    }
-                }
-                
-                # Отладочная информация
-                logger.info(f"Обновляем {crypto_name}:")
-                logger.info(f"URL: {notion_base_url}/pages/{page_id}")
-                logger.info(f"Payload: {payload}")
-                logger.info(f"Headers: {notion_headers}")
-                
-                # Отправляем PATCH запрос для обновления записи
-                url = f"{notion_base_url}/pages/{page_id}"
-                response = requests.patch(url, json=payload, headers=notion_headers)
-                logger.info(f"Response status: {response.status_code}")
-                logger.info(f"Response text: {response.text}")
-                response.raise_for_status()
-                
-                success_count += 1
-                logger.info(f"✅ Обновлен {crypto_name}: ${price:,.2f}")
-                
-                # Небольшая задержка между обновлениями
-                time.sleep(0.5)
-                
-            except Exception as e:
-                error_count += 1
-                logger.error(f"❌ Ошибка обновления {crypto_name}: {e}")
-        
-        logger.info(f"=== ОБНОВЛЕНИЕ NOTION ЗАВЕРШЕНО ===")
-        logger.info(f"✅ Успешно обновлено: {success_count}")
-        logger.info(f"❌ Ошибок: {error_count}")
-        logger.info(f"📊 Всего обработано: {len(updated_cryptos)}")
+            # ВЫПОЛНЯЕМ ВСЕ ОБНОВЛЕНИЯ ПАРАЛЛЕЛЬНО
+            updated_count = 0
+            if updates_to_do:
+                # Используем ThreadPool для параллельных запросов
+                with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    # Передаем self как первый аргумент для метода update_single_page
+                    results = list(executor.map(lambda data: self.update_single_page(data), updates_to_do))
+                    
+                    for symbol, success, error in results:
+                        if success:
+                            updated_count += 1
+                            logger.info(f"✅ Updated {symbol}")
+                        else:
+                            logger.error(f"❌ Failed to update {symbol}: {error}")
+            
+            logger.info(f"🎯 COMPLETED: {updated_count} updated")
+            
+        except Exception as e:
+            logger.error(f"💥 Fatal error in Notion update: {e}")
+            raise
     
     def get_batch_prices(self, coin_ids: List[str]) -> Dict[str, Any]:
         """Получает цены для списка монет одним запросом с retry"""
