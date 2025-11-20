@@ -1,6 +1,7 @@
+# Указываем, что используем railpacks
 [build]
 builder = "railpacks"
 
-[deploy]
-# Указываем команду запуска
+
+# Команда, которая будет выполняться
 command = "python app.py"
