@@ -3,8 +3,8 @@ import requests
 import logging
 from datetime import datetime
 from time import sleep
+import threading
 from dotenv import load_dotenv
-import concurrent.futures
 
 # --- Настройка логгирования ---
 logging.basicConfig(
@@ -24,8 +24,8 @@ NOTION_TOKEN = os.getenv("NOTION_TOKEN")
 DATABASE_ID = os.getenv("DATABASE_ID")
 
 # --- Новые переменные ---
-COINGECKO_CHUNK_SIZE = int(os.getenv("COINGECKO_CHUNK_SIZE", 200))  # Сколько монет за 1 запрос в CG
-NOTION_SYMBOL_COLUMN_NAME = os.getenv("NOTION_SYMBOL_COLUMN_NAME", "Symbol")  # Колонка с ID монеты (например, "bitcoin")
+COINGECKO_CHUNK_SIZE = int(os.getenv("COINGECKO_CHUNK_SIZE", 200))
+NOTION_SYMBOL_COLUMN_NAME = os.getenv("NOTION_SYMBOL_COLUMN_NAME", "Symbol")
 NOTION_PRICE_COLUMN_NAME = os.getenv("NOTION_PRICE_COLUMN_NAME", "Price")
 NOTION_UPDATED_COLUMN_NAME = os.getenv("NOTION_UPDATED_COLUMN_NAME", "Last Updated")
 
@@ -35,12 +35,8 @@ NOTION_HEADERS = {
     "Notion-Version": "2022-06-28"
 }
 
+# --- Основная логика обновления ---
 def get_coins_from_notion():
-    """
-    Считывает все страницы из базы Notion.
-    Извлекает уникальные 'CoinGecko ID' из указанной колонки (по умолчанию 'Symbol').
-    Возвращает set уникальных ID.
-    """
     logging.info("🔍 Получение списка криптовалют из Notion...")
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     all_coin_ids = set()
@@ -59,7 +55,6 @@ def get_coins_from_notion():
             for page in results:
                 properties = page.get("properties", {})
                 symbol_prop = properties.get(NOTION_SYMBOL_COLUMN_NAME, {})
-                # Поддержка RichText и Title
                 if symbol_prop.get("type") == "rich_text":
                     text_content = symbol_prop.get("rich_text", [{}])[0].get("text", {}).get("content", "").strip()
                 elif symbol_prop.get("type") == "title":
@@ -68,7 +63,7 @@ def get_coins_from_notion():
                     text_content = ""
 
                 if text_content:
-                    all_coin_ids.add(text_content.lower())  # Нормализуем к нижнему регистру
+                    all_coin_ids.add(text_content.lower())
                 else:
                     logging.warning(f"⚠️ Пропущена страница {page['id']}: '{NOTION_SYMBOL_COLUMN_NAME}' пустое или не найдено.")
 
@@ -85,20 +80,15 @@ def get_coins_from_notion():
 
 
 def fetch_prices_from_coingecko(coin_ids_list):
-    """
-    Отправляет запрос в CoinGecko для списка ID.
-    Возвращает словарь {coin_id: price}.
-    """
     logging.info(f"💸 Запрос цен для {len(coin_ids_list)} криптовалют у CoinGecko...")
-    
-    # Деление на чанки, если список слишком большой
+
     chunks = [coin_ids_list[i:i + COINGECKO_CHUNK_SIZE] for i in range(0, len(coin_ids_list), COINGECKO_CHUNK_SIZE)]
-    
+
     all_prices = {}
     for i, chunk in enumerate(chunks):
         ids_str = ",".join(chunk)
         url = f"https://api.coingecko.com/api/v3/simple/price?ids={ids_str}&vs_currencies=usd"
-        
+
         retries = 3
         for attempt in range(retries):
             try:
@@ -121,17 +111,13 @@ def fetch_prices_from_coingecko(coin_ids_list):
                 logging.error(f"❌ Ошибка при запросе цен (чанк {i+1}): {e}")
                 if attempt == retries - 1:
                     raise e
-        sleep(0.1) # Небольшая задержка между чанками
+        sleep(0.1)
 
     logging.info(f"📊 Всего получено цен для {len(all_prices)} монет.")
     return all_prices
 
 
 def get_all_notion_pages_for_update():
-    """
-    Получает все страницы из Notion, чтобы сопоставить их с ценами.
-    Возвращает список словарей: [{'page_id': ..., 'coin_id': ...}, ...]
-    """
     logging.info("📋 Получение всех страниц Notion для обновления...")
     url = f"https://api.notion.com/v1/databases/{DATABASE_ID}/query"
     all_pages = []
@@ -150,7 +136,7 @@ def get_all_notion_pages_for_update():
             for page in results:
                 properties = page.get("properties", {})
                 symbol_prop = properties.get(NOTION_SYMBOL_COLUMN_NAME, {})
-                
+
                 if symbol_prop.get("type") == "rich_text":
                     text_content = symbol_prop.get("rich_text", [{}])[0].get("text", {}).get("content", "").strip()
                 elif symbol_prop.get("type") == "title":
@@ -161,7 +147,7 @@ def get_all_notion_pages_for_update():
                 if text_content:
                     all_pages.append({
                         "page_id": page["id"],
-                        "coin_id": text_content.lower() # Нормализуем
+                        "coin_id": text_content.lower()
                     })
                 else:
                     logging.warning(f"⚠️ Пропущена страница {page['id']} для обновления: '{NOTION_SYMBOL_COLUMN_NAME}' пустое.")
@@ -179,10 +165,6 @@ def get_all_notion_pages_for_update():
 
 
 def update_single_notion_page(args):
-    """
-    Обновляет одну страницу Notion.
-    Args: (page_id, new_price)
-    """
     page_id, new_price = args
     url = f"https://api.notion.com/v1/pages/{page_id}"
     payload = {
@@ -207,7 +189,7 @@ def update_notion_database():
         # 1. Получить список монет из Notion
         coin_ids_from_notion = get_coins_from_notion()
         if not coin_ids_from_notion:
-            logging.warning("⚠️ В базе Notion не найдено ни одной монеты для обновления. Завершение.")
+            logging.warning("⚠️ В базе Notion не найдено ни одной монеты для обновления. Пропуск.")
             return
 
         # 2. Запросить цены для этих монет
@@ -227,12 +209,12 @@ def update_notion_database():
 
         logging.info(f"🔄 Подготовлено {len(update_tasks)} задач на обновление.")
 
-        # 5. Выполнить обновления параллельно
+        # 5. Выполнить обновления последовательно (или через ThreadPool, если хочешь)
+        from concurrent.futures import ThreadPoolExecutor
         updated_count = 0
         failed_updates = []
         if update_tasks:
-            # Ограничим workers, чтобы не превысить рейт-лимит Notion (3 req/sec)
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+            with ThreadPoolExecutor(max_workers=3) as executor:
                 results = list(executor.map(update_single_notion_page, update_tasks))
 
             for success, info in results:
@@ -249,8 +231,29 @@ def update_notion_database():
 
     except Exception as e:
         logging.critical("💥 Критическая ошибка в update_notion_database", exc_info=True)
-        raise
+
+
+# --- Фоновая задача (как в боте) ---
+def notion_scheduler():
+    """
+    Фоновая задача: обновляет Notion каждые N секунд.
+    """
+    # Интервал в секундах (например, 120 = 2 минуты)
+    UPDATE_INTERVAL_SECONDS = int(os.getenv("UPDATE_INTERVAL_SECONDS", 300))  # 5 минут по умолчанию
+    logging.info(f"⏰ Запуск планировщика Notion. Интервал: {UPDATE_INTERVAL_SECONDS} секунд.")
+    while True:
+        try:
+            update_notion_database()
+        except KeyboardInterrupt:
+            logging.info("🛑 Скрипт остановлен пользователем.")
+            break
+        except Exception as e:
+            logging.error(f"❌ Ошибка в основном цикле: {e}", exc_info=True)
+
+        logging.info(f"⏰ Ожидание {UPDATE_INTERVAL_SECONDS} секунд перед следующим обновлением...")
+        sleep(UPDATE_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":
-    update_notion_database()
+    # Запускаем планировщик в основном потоке
+    notion_scheduler()
