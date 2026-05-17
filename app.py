@@ -1,9 +1,8 @@
 import os
 import requests
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime
 from time import sleep
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 
@@ -116,40 +115,12 @@ def fetch_prices_from_coingecko(coin_ids_list):
                             else:
                                 logging.warning(f"⚠️ Текущая цена для {coin_id} не найдена.")
 
-                            # --- ЛУЧШИЙ ПОДХОД: ОТДЕЛЬНЫЙ ЗАПРОС К /coins/{id}/history ---
-                            yesterday_date = (datetime.utcnow() - timedelta(days=1)).strftime('%d-%m-%Y') # Формат dd-mm-yyyy для Coingecko
-                            history_url = f"https://api.coingecko.com/api/v3/coins/{coin_id}/history"
-                            history_params = {'date': yesterday_date}
-
-                            hist_retries = 2
-                            for hist_attempt in range(hist_retries):
-                                try:
-                                    hist_response = requests.get(history_url, params=history_params, timeout=10)
-                                    if hist_response.status_code == 200:
-                                        hist_data = hist_response.json()
-                                        market_data = hist_data.get('market_data', {})
-                                        yesterday_price_data = market_data.get('current_price', {})
-                                        yesterday_usd_price = yesterday_price_data.get('usd')
-
-                                        if yesterday_usd_price is not None:
-                                            all_yesterday_prices[coin_id] = yesterday_usd_price
-                                            logging.debug(f"📅 {coin_id} - Вчерашняя цена (из history): {yesterday_usd_price}")
-                                        else:
-                                            logging.warning(f"⚠️ Вчерашняя цена для {coin_id} не найдена в history.")
-                                        break # Успешно получили цену или её нет, выходим из попыток истории
-                                    elif hist_response.status_code == 429:
-                                        reset_time = int(hist_response.headers.get('Retry-After', 60))
-                                        logging.warning(f"⏳ Rate limit для history {coin_id}. Ожидание {reset_time} секунд...")
-                                        sleep(reset_time)
-                                        continue
-                                    else:
-                                        logging.warning(f"⚠️ Ошибка при получении истории для {coin_id}: {hist_response.status_code} - {hist_response.text}")
-                                except Exception as e_hist:
-                                    logging.error(f"❌ Ошибка при запросе истории (coin: {coin_id}, attempt {hist_attempt+1}): {e_hist}")
-                                if hist_attempt == hist_retries - 1:
-                                     logging.warning(f"⚠️ Не удалось получить историю для {coin_id} после {hist_retries} попыток.")
-                                     # Если не нашли вчерашнюю цену, не добавляем её в словарь (или можно добавить None)
-                                     # all_yesterday_prices[coin_id] = None
+                            price_change_pct = coin_data.get('price_change_percentage_24h_in_currency')
+                            if price_change_pct is not None and current_price is not None:
+                                yesterday_usd_price = current_price / (1 + price_change_pct / 100)
+                                all_yesterday_prices[coin_id] = yesterday_usd_price
+                            else:
+                                logging.debug(f"📅 {coin_id} — нет данных о 24h изменении, вчерашняя цена пропущена.")
                         else:
                              logging.warning(f"⚠️ ID монеты не найден в данных markets для chunk {i+1}.")
 
